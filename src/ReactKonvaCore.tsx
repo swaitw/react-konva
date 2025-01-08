@@ -8,12 +8,46 @@
 'use strict';
 
 import React from 'react';
-import Konva from 'konva/lib/Core';
-import ReactFiberReconciler from 'react-reconciler';
-import { LegacyRoot, ConcurrentRoot } from 'react-reconciler/constants';
-import * as HostConfig from './ReactKonvaHostConfig';
-import { applyNodeProps, toggleStrictMode } from './makeUpdates';
+
+if (React.version.indexOf('19') === -1) {
+  throw new Error(
+    'react-konva version 19 is only compatible with React 19. Make sure to have the last version of react-konva and react or downgrade react-konva to version 18.'
+  );
+}
+
+import Konva from 'konva/lib/Core.js';
+import type { Stage as KonvaStage } from 'konva/lib/Stage.js';
+import ReactFiberReconciler, {
+  RootTag,
+  SuspenseHydrationCallbacks,
+  TransitionTracingCallbacks,
+} from 'react-reconciler';
+import { ConcurrentRoot } from 'react-reconciler/constants.js';
+import * as HostConfig from './ReactKonvaHostConfig.js';
+import { applyNodeProps, toggleStrictMode } from './makeUpdates.js';
 import { useContextBridge, FiberProvider } from 'its-fine';
+import { Container } from 'konva/lib/Container.js';
+
+/**
+ * React 19 introduced a new `ReactFiberReconciler.createContainer` signature
+ * with more error handling options [1]. The DefinitelyTyped types are also
+ * out of date because of this [2].
+ *
+ * 1. https://github.com/facebook/react/commit/a0537160771bafae90c6fd3154eeead2f2c903e7
+ * 2. https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/types/react-reconciler/index.d.ts#L920
+ */
+type NewCreateContainer = (
+  containerInfo: Container,
+  tag: RootTag,
+  hydrationCallbacks: null | SuspenseHydrationCallbacks<any>,
+  isStrictMode: boolean,
+  concurrentUpdatesByDefaultOverride: null | boolean,
+  identifierPrefix: string,
+  onUncaughtError: (error: Error) => void,
+  onCaughtError: (error: Error) => void,
+  onRecoverableError: (error: Error) => void,
+  transitionCallbacks: null | TransitionTracingCallbacks
+) => ReactFiberReconciler.FiberRoot;
 
 function usePrevious(value) {
   const ref = React.useRef({});
@@ -33,9 +67,9 @@ function usePrevious(value) {
 }
 
 const StageWrap = (props) => {
-  const container = React.useRef();
-  const stage = React.useRef<any>();
-  const fiberRef = React.useRef();
+  const container = React.useRef(null);
+  const stage = React.useRef<any>(null);
+  const fiberRef = React.useRef(null);
 
   const oldProps = usePrevious(props);
   const Bridge = useContextBridge();
@@ -62,21 +96,27 @@ const StageWrap = (props) => {
     _setRef(stage.current);
 
     // @ts-ignore
-    fiberRef.current = KonvaRenderer.createContainer(
+    fiberRef.current = (KonvaRenderer.createContainer as NewCreateContainer)(
       stage.current,
-      LegacyRoot,
+      ConcurrentRoot,
+      null,
       false,
+      null,
+      '',
+      console.error,
+      console.error,
+      console.error,
       null
     );
+
     KonvaRenderer.updateContainer(
       React.createElement(Bridge, {}, props.children),
-      fiberRef.current
+      fiberRef.current,
+      null,
+      () => {}
     );
 
     return () => {
-      if (!Konva.isBrowser) {
-        return;
-      }
       _setRef(null);
       KonvaRenderer.updateContainer(null, fiberRef.current, null);
       stage.current.destroy();
@@ -139,7 +179,17 @@ KonvaRenderer.injectIntoDevTools({
   rendererPackageName: 'react-konva',
 });
 
-export const Stage = React.forwardRef((props, ref) => {
+// Add this interface
+interface StageProps extends React.RefAttributes<KonvaStage> {
+  children?: React.ReactNode;
+  width?: number;
+  height?: number;
+  name?: string;
+  [key: string]: any;
+}
+
+// Update Stage component declaration
+export const Stage: React.FC<StageProps> = React.forwardRef((props, ref) => {
   return React.createElement(
     FiberProvider,
     {},
